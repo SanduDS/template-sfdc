@@ -14,70 +14,86 @@
 // specific language governing permissions and limitations
 // under the License.
 
-import ballerina/config;
+import ballerinax/googleapis_sheets as sheets4;
 import ballerina/io;
 import ballerina/log;
+import ballerina/os;
 import ballerinax/sfdc;
-import ballerinax/googleapis_sheets as sheets4;
+
+configurable string sfBaseUrl =  os:getEnv("SF_EP_URL");
+configurable string sfClientId =  os:getEnv("SF_CLIENT_ID");
+configurable string sfClientSecret = os:getEnv("SF_CLIENT_SECRET");
+configurable string sfRefreshToken = os:getEnv("SF_REFRESH_TOKEN");
+configurable string sfRefreshUrl = os:getEnv("SF_REFRESH_URL");
+
+configurable string gSheetClientId =  os:getEnv("GS_CLIENT_ID");
+configurable string gSheetClientSecret = os:getEnv("GS_CLIENT_SECRET");
+configurable string gSheetRefreshToken = os:getEnv("GS_REFRESH_TOKEN");
+
+configurable string sfUsername =  os:getEnv("SF_USERNAME");
+configurable string sfPassword = os:getEnv("SF_PASSWORD");
+
+configurable string sfTopic =  os:getEnv("SF_CASE_TOPIC");
 
 sfdc:SalesforceConfiguration sfConfig = {
-    baseUrl: config:getAsString("SF_EP_URL"),
+    baseUrl: sfBaseUrl,
     clientConfig: {
-        accessToken: config:getAsString("SF_ACCESS_TOKEN"),
-        refreshConfig: {
-            clientId: config:getAsString("SF_CLIENT_ID"),
-            clientSecret: config:getAsString("SF_CLIENT_SECRET"),
-            refreshToken: config:getAsString("SF_REFRESH_TOKEN"),
-            refreshUrl: config:getAsString("SF_REFRESH_URL")
-        }
+        clientId: sfClientId,
+        clientSecret: sfClientSecret,
+        refreshToken: sfRefreshToken,
+        refreshUrl: sfRefreshUrl
     }
 };
 
 sheets4:SpreadsheetConfiguration spreadsheetConfig = {
-    oauth2Config: {
-        accessToken: config:getAsString("GS_ACCESS_TOKEN"),
-        refreshConfig: {
-            clientId: config:getAsString("GS_CLIENT_ID"),
-            clientSecret: config:getAsString("GS_CLIENT_SECRET"),
-            refreshUrl: config:getAsString("GS_REFRESH_URL"),
-            refreshToken: config:getAsString("GS_REFRESH_TOKEN")
-        }
+    oauthClientConfig: {
+        refreshUrl: sheets4:REFRESH_URL,
+        refreshToken: gSheetRefreshToken,
+        clientId: gSheetClientId,
+        clientSecret: gSheetClientSecret
     }
 };
 
 sfdc:ListenerConfiguration listenerConfig = {
-    username: config:getAsString("SF_USERNAME"),
-    password: config:getAsString("SF_PASSWORD")
+    username: sfUsername,
+    password: sfPassword
 };
 
 listener sfdc:Listener sfdcEventListener = new (listenerConfig);
-sfdc:BaseClient sfdcClient = new (sfConfig);
-sheets4:Client gSheetClient = new (spreadsheetConfig);
+sfdc:BaseClient sfdcClient = checkpanic new (sfConfig);
+sheets4:Client gSheetClient = checkpanic new (spreadsheetConfig);
 
-@sfdc:ServiceConfig {topic:config:getAsString("SF_CASE_TOPIC")}
+@sfdc:ServiceConfig {topic: sfTopic}
 service on sfdcEventListener {
     remote function onEvent(json case) {
         io:StringReader sr = new (case.toJsonString());
         json|error caseInfo = sr.readJson();
         if (caseInfo is json) {
-            if(CREATED.equalsIgnoreCaseAscii(caseInfo.event.'type.toString())){
-                var caseId = caseInfo.sobject.Id;
-                log:print("Case ID = "+caseId.toString());
-                var caseRecord = sfdcClient->getRecordById("Case",caseId.toString());
-                if(caseRecord is json){
-                   [string,string]|error? response = createSheetWithNewCase(caseRecord);
-                   if (response is [string, string]) {
-                      log:print("Spreadsheet with ID "+response[0]+" is created for new Salesforce Case Number "
-                      +response[1]); 
-                   }
-                   else{
-                       log:printError(response.toString());
-                   }
-                }
-                else {
-                    log:printError(caseRecord.toString());
-                }
-            }        
+            json|error eventType = caseInfo.event.'type;
+            if (eventType is json) {
+                if(CREATED.equalsIgnoreCaseAscii(eventType.toString())){
+                    json|error caseId = caseInfo.sobject.Id;
+                    json|error caseRecord = "";
+                    if (caseId is json) {
+                        caseRecord = sfdcClient->getRecordById("Case", caseId.toString());
+                        log:print("Case ID = " + caseId.toString());
+                    }
+                    if (caseRecord is json) {
+                        [string,string]|error response = createSheetWithNewCase(caseRecord);
+                        if (response is [string, string]) {
+                            log:print("Spreadsheet with ID "+response[0] + " is created for new Salesforce Case Number "
+                                + response[1]); 
+                        } else {                       
+                            log:printError(response.toString());
+                        }
+                    }
+                    else {
+                        log:printError(caseRecord.toString());
+                    }
+                }  
+            } else {
+                log:printError(eventType.message());
+            }    
         }
         else
         {
@@ -86,17 +102,23 @@ service on sfdcEventListener {
     }
 }
 
-function createSheetWithNewCase(json case) returns @tainted [string,string] | error?{
-    string caseNumber = case.CaseNumber.toString();
-    sheets4:Spreadsheet spreadsheet = check gSheetClient->createSpreadsheet("Salesforce Case "+caseNumber);
-    string spreadsheetId = spreadsheet.spreadsheetId;
-    sheets4:Sheet sheet = check spreadsheet.getSheetByName("Sheet1");
-    map<json> caseMap = <map<json>> case;
-    foreach var [key, value] in caseMap.entries() {
-        var response = sheet->appendRow([key, value.toString()]);
-        if(response is error){
-            log:printError(response.message());
-        }
-    } 
-    return [spreadsheetId, caseNumber];
+function createSheetWithNewCase(json case) returns @tainted [string,string] | error {
+    json|error caseNumberValue = case.CaseNumber;
+    if (caseNumberValue is json ) {
+        string caseNumber =  caseNumberValue.toString();
+        sheets4:Spreadsheet spreadsheet = check gSheetClient->createSpreadsheet("Salesforce Case " + caseNumber);
+        string spreadsheetId = spreadsheet.spreadsheetId;
+        sheets4:Sheet sheet = check gSheetClient->getSheetByName(spreadsheetId, "Sheet1");
+        map<json> caseMap = <map<json>> case;
+        foreach var [key, value] in caseMap.entries() {
+            var response = gSheetClient->appendRowToSheet(spreadsheetId, sheet.properties.title, [key, value.toString()]);
+            if(response is error){
+                log:printError(response.message());
+            }
+        } 
+        return [spreadsheetId, caseNumber];
+    } else {
+        return caseNumberValue;
+    }
+    
 }

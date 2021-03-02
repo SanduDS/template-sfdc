@@ -1,3 +1,4 @@
 target
 ballerina.conf
 ballerina-internal.log
+Config.toml

@@ -16,7 +16,7 @@
 
 import ballerina/log;
 import ballerina/test;
-import ballerina/runtime;
+import ballerina/lang.runtime;
 import ballerinax/sfdc;
 
 json testCaseRecord = {
@@ -37,5 +37,5 @@ function testNewCaseRecord() {
     } else {
         test:assertFail(msg = stringResponse.message());
     }
-    runtime:sleep(120000);
+    runtime:sleep(12);
 }
